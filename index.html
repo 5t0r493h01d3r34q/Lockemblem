@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Private File Vault</title>
+    <style>
+        /* Minimal inline CSS for small screens and keypad phones */
+        body {
+            font-family: sans-serif;
+            margin: 8px;
+            padding: 0;
+            background-color: #f4f4f4;
+            color: #000000;
+            font-size: 14px;
+        }
+        h1, h2, h3 {
+            margin: 6px 0;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid #ccc;
+            padding: 8px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+        }
+        button, input, select {
+            padding: 6px;
+            margin: 4px 0;
+            font-size: 13px;
+        }
+        button {
+            background-color: #e0e0e0;
+            border: 1px solid #999;
+            cursor: pointer;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 6px;
+            background: #fff;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 6px;
+            text-align: left;
+            font-size: 12px;
+            word-break: break-all;
+        }
+        th {
+            background-color: #e9e9e9;
+        }
+        .hidden {
+            display: none !important;
+        }
+        .status-msg {
+            background: #ffffcc;
+            border: 1px solid #e6e600;
+            padding: 6px;
+            margin: 6px 0;
+            font-size: 12px;
+        }
+        .preview-box {
+            background: #fff;
+            border: 1px solid #999;
+            padding: 6px;
+            margin-top: 6px;
+            max-width: 100%;
+            overflow: auto;
+        }
+        img, video, audio {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Private Local Vault</h1>
+    <p><small>Offline Local File Manager for Low-Spec Devices</small></p>
+
+    <!-- Security PIN Lock Screen -->
+    <div id="lockScreen" class="card">
+        <h3>Vault Security Lock</h3>
+        <p>Enter 4-digit PIN to access files:</p>
+        <input type="password" id="pinInput" maxlength="4" placeholder="1234" style="width: 80px; text-align: center;">
+        <button onclick="unlockVault()">Unlock</button>
+        <div id="pinStatus" class="status-msg hidden"></div>
+    </div>
+
+    <!-- Main Vault Workspace -->
+    <div id="mainVault" class="hidden">
+
+        <!-- Storage Summary & Controls -->
+        <div class="card">
+            <h3>Vault Maintenance</h3>
+            <div>Files Stored: <strong id="fileCount">0</strong></div>
+            <div>Total Used: <strong id="totalSize">0 KB</strong></div>
+            <button onclick="lockVault()">Lock Vault</button>
+            <button onclick="setPin()">Change PIN</button>
+        </div>
+
+        <!-- Add Files Form -->
+        <div class="card">
+            <h3>Add New Files</h3>
+            <input type="file" id="fileSelector" multiple>
+            <br>
+            <button onclick="saveSelectedFiles()">Save Files to Vault</button>
+        </div>
+
+        <!-- Search & Filter -->
+        <div class="card">
+            <h3>Stored Files Explorer</h3>
+            <label>Search:</label>
+            <input type="text" id="searchInput" onkeyup="displayFiles()" placeholder="File name...">
+            
+            <label>Filter:</label>
+            <select id="categoryFilter" onchange="displayFiles()">
+                <option value="all">All Types</option>
+                <option value="images">Images</option>
+                <option value="audio">Audio</option>
+                <option value="video">Video</option>
+                <option value="docs">Documents & Text</option>
+            </select>
+        </div>
+
+        <!-- Notification Message Box -->
+        <div id="statusBox" class="status-msg hidden"></div>
+
+        <!-- Files List Table -->
+        <table id="filesTable">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Size</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="filesTableBody">
+                <tr>
+                    <td colspan="3">No files stored yet.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <!-- File Viewer / Preview Box -->
+        <div id="previewCard" class="card hidden">
+            <h3 id="previewTitle">File Preview</h3>
+            <div id="previewContainer" class="preview-box"></div>
+            <br>
+            <button onclick="closePreview()">Close Preview</button>
+        </div>
+
+    </div>
+
+    <script>
+        // Keypad / Basic Browser Compatibility Storage (IndexedDB)
+        var db = null;
+        var DB_NAME = 'ItelSimpleVault';
+        var STORE_NAME = 'vault_files';
+        var allFiles = [];
+
+        // Check & Initialize IndexedDB
+        function initDB() {
+            var request = window.indexedDB.open(DB_NAME, 1);
+
+            request.onupgradeneeded = function(e) {
+                var database = e.target.result;
+                if (!database.objectStoreNames.contains(STORE_NAME)) {
+                    database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                }
+            };
+
+            request.onsuccess = function(e) {
+                db = e.target.result;
+                checkPinStatus();
+            };
+
+            request.onerror = function(e) {
+                showStatus('Storage error: Browser may not support IndexedDB.');
+            };
+        }
+
+        // Security Lock Logic
+        function checkPinStatus() {
+            var savedPin = localStorage.getItem('simple_vault_pin');
+            if (!savedPin) {
+                // First time setup
+                document.getElementById('lockScreen').classList.add('hidden');
+                document.getElementById('mainVault').classList.remove('hidden');
+                loadFilesFromDB();
+            } else {
+                document.getElementById('lockScreen').classList.remove('hidden');
+                document.getElementById('mainVault').classList.add('hidden');
+            }
+        }
+
+        function unlockVault() {
+            var entered = document.getElementById('pinInput').value;
+            var savedPin = localStorage.getItem('simple_vault_pin');
+            
+            if (entered === savedPin) {
+                document.getElementById('lockScreen').classList.add('hidden');
+                document.getElementById('mainVault').classList.remove('hidden');
+                document.getElementById('pinInput').value = '';
+                loadFilesFromDB();
+            } else {
+                var pinStatus = document.getElementById('pinStatus');
+                pinStatus.textContent = 'Incorrect PIN!';
+                pinStatus.classList.remove('hidden');
+            }
+        }
+
+        function lockVault() {
+            var savedPin = localStorage.getItem('simple_vault_pin');
+            if (!savedPin) {
+                setPin();
+            } else {
+                document.getElementById('mainVault').classList.add('hidden');
+                document.getElementById('lockScreen').classList.remove('hidden');
+                closePreview();
+            }
+        }
+
+        function setPin() {
+            var newPin = prompt('Enter a new 4-digit PIN (or leave blank to remove pin lock):');
+            if (newPin !== null) {
+                if (newPin.trim() === '') {
+                    localStorage.removeItem('simple_vault_pin');
+                    showStatus('PIN lock removed.');
+                } else if (/^\d{4}$/.test(newPin)) {
+                    localStorage.setItem('simple_vault_pin', newPin);
+                    showStatus('PIN saved successfully.');
+                } else {
+                    showStatus('PIN must be 4 digits.');
+                }
+            }
+        }
+
+        // Save File to IndexedDB
+        function saveSelectedFiles() {
+            var fileInput = document.getElementById('fileSelector');
+            var files = fileInput.files;
+
+            if (!files || files.length === 0) {
+                showStatus('Please choose a file first.');
+                return;
+            }
+
+            var loadedCount = 0;
+            for (var i = 0; i < files.length; i++) {
+                (function(file) {
+                    var record = {
+                        id: 'file_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                        name: file.name,
+                        type: file.type || 'application/octet-stream',
+                        size: file.size,
+                        date: new Date().toLocaleDateString(),
+                        blob: file
+                    };
+
+                    var tx = db.transaction(STORE_NAME, 'readwrite');
+                    var store = tx.objectStore(STORE_NAME);
+                    var req = store.put(record);
+
+                    req.onsuccess = function() {
+                        loadedCount++;
+                        if (loadedCount === files.length) {
+                            showStatus(files.length + ' file(s) saved to vault.');
+                            fileInput.value = '';
+                            loadFilesFromDB();
+                        }
+                    };
+
+                    req.onerror = function() {
+                        showStatus('Failed to save file: ' + file.name);
+                    };
+                })(files[i]);
+            }
+        }
+
+        // Fetch Files from IndexedDB
+        function loadFilesFromDB() {
+            if (!db) return;
+            var tx = db.transaction(STORE_NAME, 'readonly');
+            var store = tx.objectStore(STORE_NAME);
+            var req = store.getAll();
+
+            req.onsuccess = function(e) {
+                allFiles = e.target.result || [];
+                displayFiles();
+                updateStorageMetrics();
+            };
+        }
+
+        // Display Files in Simple Table
+        function displayFiles() {
+            var tbody = document.getElementById('filesTableBody');
+            var search = document.getElementById('searchInput').value.toLowerCase();
+            var filter = document.getElementById('categoryFilter').value;
+
+            tbody.innerHTML = '';
+
+            var filtered = allFiles.filter(function(f) {
+                var matchesSearch = f.name.toLowerCase().indexOf(search) !== -1;
+                var matchesCat = true;
+
+                if (filter === 'images') matchesCat = f.type.indexOf('image') !== -1;
+                else if (filter === 'audio') matchesCat = f.type.indexOf('audio') !== -1;
+                else if (filter === 'video') matchesCat = f.type.indexOf('video') !== -1;
+                else if (filter === 'docs') matchesCat = f.type.indexOf('text') !== -1 || f.type.indexOf('pdf') !== -1;
+
+                return matchesSearch && matchesCat;
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3">No matching files found.</td></tr>';
+                return;
+            }
+
+            for (var i = 0; i < filtered.length; i++) {
+                var f = filtered[i];
+                var tr = document.createElement('tr');
+
+                var tdName = document.createElement('td');
+                tdName.textContent = f.name;
+
+                var tdSize = document.createElement('td');
+                tdSize.textContent = formatBytes(f.size);
+
+                var tdActions = document.createElement('td');
+                
+                // View button
+                var btnView = document.createElement('button');
+                btnView.textContent = 'View';
+                btnView.onclick = (function(fileId) {
+                    return function() { previewFile(fileId); };
+                })(f.id);
+
+                // Download copy button
+                var btnDownload = document.createElement('button');
+                btnDownload.textContent = 'Save Copy';
+                btnDownload.onclick = (function(fileObj) {
+                    return function() { downloadCopy(fileObj); };
+                })(f);
+
+                // Delete button
+                var btnDelete = document.createElement('button');
+                btnDelete.textContent = 'Del';
+                btnDelete.onclick = (function(fileId) {
+                    return function() { deleteFile(fileId); };
+                })(f.id);
+
+                tdActions.appendChild(btnView);
+                tdActions.appendChild(document.createTextNode(' '));
+                tdActions.appendChild(btnDownload);
+                tdActions.appendChild(document.createTextNode(' '));
+                tdActions.appendChild(btnDelete);
+
+                tr.appendChild(tdName);
+                tr.appendChild(tdSize);
+                tr.appendChild(tdActions);
+
+                tbody.appendChild(tr);
+            }
+        }
+
+        // Preview File
+        function previewFile(id) {
+            var file = allFiles.find(function(item) { return item.id === id; });
+            if (!file) return;
+
+            var container = document.getElementById('previewContainer');
+            var card = document.getElementById('previewCard');
+            var title = document.getElementById('previewTitle');
+
+            title.textContent = 'Preview: ' + file.name;
+            container.innerHTML = '';
+
+            var url = URL.createObjectURL(file.blob);
+
+            if (file.type.indexOf('image') !== -1) {
+                var img = document.createElement('img');
+                img.src = url;
+                container.appendChild(img);
+            } else if (file.type.indexOf('audio') !== -1) {
+                var audio = document.createElement('audio');
+                audio.controls = true;
+                audio.src = url;
+                container.appendChild(audio);
+            } else if (file.type.indexOf('video') !== -1) {
+                var video = document.createElement('video');
+                video.controls = true;
+                video.src = url;
+                container.appendChild(video);
+            } else if (file.type.indexOf('text') !== -1) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var pre = document.createElement('pre');
+                    pre.style.whiteSpace = 'pre-wrap';
+                    pre.textContent = e.target.result;
+                    container.appendChild(pre);
+                };
+                reader.readAsText(file.blob);
+            } else {
+                container.textContent = 'No inline preview available for ' + file.type + '. Click "Save Copy" to download.';
+            }
+
+            card.classList.remove('hidden');
+        }
+
+        function closePreview() {
+            document.getElementById('previewCard').classList.add('hidden');
+            document.getElementById('previewContainer').innerHTML = '';
+        }
+
+        // Download Original Copy
+        function downloadCopy(file) {
+            var url = URL.createObjectURL(file.blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+            showStatus('Downloading copy of: ' + file.name);
+        }
+
+        // Delete File
+        function deleteFile(id) {
+            if (!db) return;
+            var tx = db.transaction(STORE_NAME, 'readwrite');
+            var store = tx.objectStore(STORE_NAME);
+            var req = store.delete(id);
+
+            req.onsuccess = function() {
+                showStatus('File deleted from vault.');
+                loadFilesFromDB();
+            };
+
+            req.onerror = function() {
+                showStatus('Failed to delete file.');
+            };
+        }
+
+        // Helper Utilities
+        function updateStorageMetrics() {
+            document.getElementById('fileCount').textContent = allFiles.length;
+            var total = 0;
+            for (var i = 0; i < allFiles.length; i++) {
+                total += allFiles[i].size;
+            }
+            document.getElementById('totalSize').textContent = formatBytes(total);
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            var k = 1024;
+            var sizes = ['B', 'KB', 'MB', 'GB'];
+            var i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function showStatus(msg) {
+            var box = document.getElementById('statusBox');
+            box.textContent = msg;
+            box.classList.remove('hidden');
+            setTimeout(function() {
+                box.classList.add('hidden');
+            }, 3000);
+        }
+
+        // Initialize on page load
+        window.onload = function() {
+            initDB();
+        };
+    </script>
+</body>
+</html>
